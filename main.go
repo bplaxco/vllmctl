@@ -19,9 +19,10 @@ const (
 
 // Structures for the API request and response (OpenAI-compatible)
 type APIRequest struct {
-	Model    string    `json:"model"`
-	Messages []Message `json:"messages"`
-	Stream   bool      `json:"stream,omitempty"`
+	Model       string    `json:"model"`
+	Messages    []Message `json:"messages"`
+	Stream      bool      `json:"stream,omitempty"`
+	Temperature float64   `json:"temperature,omitempty"` // Added Temperature field
 }
 
 type Message struct {
@@ -66,6 +67,7 @@ func main() {
 	// --- Command-line flag parsing ---
 	systemPrompt := flag.String("system", "You are a helpful assistant.", "System prompt for the LLM")
 	userPromptFlag := flag.String("user", "", "User prompt for the LLM (overrides stdin)")
+	temperatureFlag := flag.Float64("temperature", 0.7, "Temperature for LLM generation (e.g., 0.2 for more deterministic, 1.0 for more random)") // Added temperature flag
 	flag.Parse()
 
 	var userPrompt string
@@ -73,13 +75,16 @@ func main() {
 	if *userPromptFlag != "" {
 		userPrompt = *userPromptFlag
 	} else {
-
-		stdinBytes, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
-			os.Exit(1)
+		// Check if input is being piped
+		stat, _ := os.Stdin.Stat()
+		if (stat.Mode() & os.ModeCharDevice) == 0 { // Check if data is piped
+			stdinBytes, err := io.ReadAll(os.Stdin)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "Error reading from stdin: %v\n", err)
+				os.Exit(1)
+			}
+			userPrompt = strings.TrimSpace(string(stdinBytes))
 		}
-		userPrompt = strings.TrimSpace(string(stdinBytes))
 	}
 
 	if userPrompt == "" && len(flag.Args()) > 0 {
@@ -99,8 +104,9 @@ func main() {
 	}
 
 	apiRequest := APIRequest{
-		Model:    vllmModel,
-		Messages: messages,
+		Model:       vllmModel,
+		Messages:    messages,
+		Temperature: *temperatureFlag,
 	}
 
 	jsonData, err := json.Marshal(apiRequest)
@@ -109,7 +115,14 @@ func main() {
 		os.Exit(1)
 	}
 
-	req, err := http.NewRequest("POST", vllmAPIURL+"/v1/chat/completions", bytes.NewBuffer(jsonData))
+	// Construct the full API endpoint
+	fullAPIURL := vllmAPIURL
+	if !strings.HasSuffix(fullAPIURL, "/") {
+		fullAPIURL += "/"
+	}
+	fullAPIURL += "v1/chat/completions"
+
+	req, err := http.NewRequest("POST", fullAPIURL, bytes.NewBuffer(jsonData))
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "Error creating request: %v\n", err)
 		os.Exit(1)
